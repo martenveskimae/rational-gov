@@ -1,0 +1,234 @@
+---
+title: "Making and Breaking Cabinets"
+author: "Märten Veskimäe"
+date: "29/11/2016"
+output:
+  html_document:
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      message = FALSE,
+                      fig.align = "center")
+```
+
+## How to model government formation in R?
+
+In the following tutorial we are going to explore one possible method of implementing government formation theory (in multiparty scenario) created by Michael Laveri and Kenneth A. Shepsle ([1996](https://books.google.ee/books?id=LBIDMWLyZiEC), [1997](https://books.google.ee/books?id=eRT91X71A_sC)) in [R](https://www.r-project.org). The theory lies heavily on Rational Choice Theory and applies economic logic to political negotiations between dependent actors. According to Laver and Shepsle, political parties prefer to cooperate with closest parties to avoid excessive distancing from their standpoint.
+
+In this tutorial, we are going to use Estonian parties and their current positions on political landscape (left-right (*economic*) and conservative-liberal (*moral*)). 
+
+While our tutorial does not require any additional packages, we will use *ggplot2* and *ggthemes* for graphs and *dplyr* for data manipulation. First, let's create a data frame for our parties...
+
+```{r algandmed}
+library(ggplot2)
+library(ggthemes)
+library(dplyr)
+
+df <- data.frame(party = c("kesk", "sde", "ekre", "vaba", "ref", "irl"),
+                 lrScale = c(-7.8, -7.8, -0.6, 2.2, 4.4, 3.3),
+                 conlibScale = c(3.1, 5.6, -9.4, 1.9, 0.6, -3.8),
+                 seats = c(27, 15, 7, 8, 30, 14))
+```
+
+...and then visualize their positions.
+
+```{r joonis}
+df %>% ggplot() +
+  aes(lrScale, conlibScale) +
+  geom_point() +
+  geom_text(aes(label=paste0(party, " ", seats)), hjust=-.3, vjust=.3) +
+  coord_cartesian(xlim=c(-10,10), ylim=c(-10, 10)) +
+  xlab("left-right") + ylab("conservative-liberal") +
+  theme_minimal() +
+  theme(aspect.ratio = 1,
+        legend.position = "right",
+        plot.background = NULL)
+```
+
+Both scales (economic and moral) are between -10 and 10. We can also see the number of seats each party obtained after 2015. NP elections. Since no party got over 50% of the seats, parties need to cooperate and make compromises with each other. But how can we analyze the extent of compromises with given data.
+
+### Rational Choices
+
+As it turns out, that's not all we know. We can make couple of safe assumptions about the way parties interact with each other:
+
+1. Proximity - Parties' *relative position* on the political landscape is often just as important as their size. If we assume that parties wish to cooperate with parties closest to them, we can also assume that parties in the middle of political spectrum have unproportioned negotiations power. Parties in the median position are a desired ally for all the other parties around, which is why they have more space for making demands. We can call these parties *pivot parties*.
+2. Majority - As was already hinted, successful cabinets usually need the majority of the parliamentary seats. Otherwise they couldn't ensure that their policies would go through parliamentary hearings.
+3. Minimal majority - while majority is required, one would wish to include only as many parties as necessary and not more. Otherwise increased negotiations' and coordination costs would destabilize the coalition.
+
+Starting with proximity, let's calculate which parties fill are pivotal to coalition forming. For that we need to find median values for both scales that are weighed by the number of seats.
+
+```{r mediaan}
+# weighted x-axis
+wx = c(rep(df[1,]$lrScale, df[1,]$seats),
+       rep(df[2,]$lrScale, df[2,]$seats),
+       rep(df[3,]$lrScale, df[3,]$seats),
+       rep(df[4,]$lrScale, df[4,]$seats),
+       rep(df[5,]$lrScale, df[5,]$seats),
+       rep(df[6,]$lrScale, df[6,]$seats))
+
+# weighted y-axis
+wy = c(rep(df[1,]$conlibScale, df[1,]$seats),
+       rep(df[2,]$conlibScale, df[2,]$seats),
+       rep(df[3,]$conlibScale, df[3,]$seats),
+       rep(df[4,]$conlibScale, df[4,]$seats),
+       rep(df[5,]$conlibScale, df[5,]$seats),
+       rep(df[6,]$conlibScale, df[6,]$seats))
+
+# results joined with our initial data frame.
+df <- df %>% mutate(medianX = median(wx),
+                    medianY = median(wy),
+                    r = sqrt((lrScale - medianX)^2 + (conlibScale - medianY)^2)) # distance from medians' intercept point
+
+df
+```
+
+```{r joonis22}
+df %>% ggplot() +
+  aes(lrScale, conlibScale) +
+  geom_point() +
+  geom_text(aes(label=paste0(party, " ", seats)), hjust=-.3, vjust=.3) +
+  geom_line(aes(lrScale, median(wy))) +
+  geom_line(aes(median(wx), conlibScale)) +
+  geom_point(aes(median(wx), median(wy))) +
+  coord_cartesian(xlim=c(-10,10), ylim=c(-10, 10)) +
+  xlab("left-right") + ylab("conservative-liberal") +
+  theme_minimal() +
+  theme(aspect.ratio = 1,
+        legend.position = "right",
+        plot.background = NULL)
+```
+
+As can be seen above, our pivot party on the economic scale is **Vabaerakond** and on the moral scale **Reformierakond**. The intercept point of median lines (median point) marks the sweet spot, which no party currently fills. This means that every party must be willing to compromise if they do wish to be in coalition.
+
+According to Laver and Shepsle, the optimum extent of compromises for each party borders with the median point. This can be understood through [Nash equilibrium](https://en.wikipedia.org/wiki/Nash_equilibrium) which accounts for each actor's interests. The game situation imposed by our landscape finds equilibrium at medium point. In other words, no party can improve its position given that other parties remain the same.
+
+To calculate possible coalitions, we now have to find overlapping areas between our parties. Here, another assumption is made: parties, knowing their optimal limit for compromise, are indifferent whether their position fluctuates in any direction on the landscape, as long as its within the found limits. We can, therefore, measure overlapping by imagining areas of indifference as a circle around parties' position. Circles' radius is the distance between party's position and medium point.
+
+This is best illustrated by drawing circles around parties. To do this, we need to find the coordinates for circle points and then join those coordinates with a line.
+
+```{r ringid}
+# function to find coordinates
+circleCoord <- function(center = c(0,0), r, party){
+  tt <- seq(0,2*pi,length.out = 100)
+  xx <- center[1] + r * cos(tt)
+  yy <- center[2] + r * sin(tt)
+  return(data.frame(x = xx, y = yy, party = party))
+}
+
+# loop function to find circle coordinates for each party
+circlesData <- lapply(c(1:nrow(df)), function(x){
+  circleCoord(c(df$lrScale[x], df$conlibScale[x]), df$r[x], df$party[x])
+})
+
+# joining list into a data frame
+circlesData <- do.call("rbind", circlesData)
+```
+
+```{r joonis2}
+circlesData %>% ggplot() +
+  aes(x,y, color=party) +
+  geom_point(data=df, aes(lrScale, conlibScale)) +
+  geom_text(data=df, aes(lrScale, conlibScale, label=party), hjust=-.3, vjust=.3) +
+  coord_cartesian(xlim=c(-10,10), ylim=c(-10, 10)) +
+  geom_path() +
+  scale_color_manual(values = c("brown", "steelblue3", "darkgreen", "orange3", "red", "darkgrey")) +
+  xlab("left-right") + ylab("conservative-liberal") +
+  theme_minimal() +
+  theme(aspect.ratio = 1,
+        legend.position = "",
+        plot.background = NULL)
+```
+
+Next we need to measure the size of overlapping areas and account for the parliamentary majority condition. The easiest way is to throw random data points on the landscape and how many of those fit with our criteria. This will give us relatively precise results!
+
+```{r pikslid}
+# create empty data frame for binding results
+scattered <- data.frame(x = NA, y = NA, ref = NA, kesk = NA, sde = NA, irl = NA, vaba = NA, ekre = NA, sum = NA, majority = NA, party = NA)
+
+# function for determening overlap
+partyDistance <- function(x, y, party){
+  tmp <- df[df$party == party,]$r >= sqrt((x - df[df$party == party,]$lrScale)^2 + (y - df[df$party == party,]$conlibScale)^2)
+  return(tmp)
+}
+
+# scatter density
+step <- .1
+# scattering
+coordinatesX <- seq(-2,7,step)
+coordinatesY <- seq(-4,2.5,step)
+for(i in 1:length(coordinatesY)){
+  for(j in 1:length(coordinatesX)){
+    coord <- data.frame(x = coordinatesX[j],
+                        y = coordinatesY[i])
+    
+    # calculate, whether parties' circles overlap with data points, how many seats do overlappig parties have, if it's enough and which parties contribute to this mix
+    coord <- coord %>% mutate(ref = ifelse(partyDistance(x, y, "ref"), df[df$party == "ref",]$seats, 0),
+                              kesk = ifelse(partyDistance(x, y, "kesk"), df[df$party == "kesk",]$seats, 0),
+                              sde = ifelse(partyDistance(x, y, "sde"), df[df$party == "sde",]$seats, 0),
+                              irl = ifelse(partyDistance(x, y, "irl"), df[df$party == "irl",]$seats, 0),
+                              vaba = ifelse(partyDistance(x, y, "vaba"), df[df$party == "vaba",]$seats, 0),
+                              ekre = ifelse(partyDistance(x, y, "ekre"), df[df$party == "ekre",]$seats, 0),
+                              sum = ref + kesk + sde + irl + vaba + ekre,
+                              majority = ifelse(sum >= 51, TRUE, FALSE),
+                              party = paste0(ifelse(ref>0,"ref ",""),
+                                             ifelse(kesk>0,"kesk ",""),
+                                             ifelse(sde>0,"sde ",""),
+                                             ifelse(irl>0,"irl ",""),
+                                             ifelse(vaba>0,"vaba ",""),
+                                             ifelse(ekre>0,"ekre ",""),
+                                             sum))
+    
+    # bind results into one data frame
+    scattered <- rbind(scattered, coord)
+  }
+}
+# delete the initial empty row
+scattered <- scattered[-1,]
+```
+
+Let's look at the results in a table format
+```{r grupid}
+maxValue <- (20/step) * (20/step)
+scatterTable <- scattered %>%
+  group_by(coalition = party, majority, sum) %>%
+  summarise(n = n()) %>%
+  mutate(percent = n/maxValue*100) %>%
+  filter(majority == TRUE) %>%
+  select(coalition, percent) %>%
+  arrange(desc(percent))
+
+scatterTable
+```
+
+The table above shows us the ratio between overlapping area and total area for possible coalitions. Largest overlap seems to be in coalition "`r scatterTable[1,2]`" (`r round(scatterTable[1,3],2)`% of total area), and secondly in coalition "`r scatterTable[2,2]`" (`r round(scatterTable[2,3],2)`% of total area).
+
+But we can also graph our results for better overview
+
+```{r viimane}
+circlesData %>% ggplot() +
+  aes(x,y, color = party) +
+  geom_point(data=scattered[scattered$majority == TRUE,], aes(x, y), size = .01) +
+  geom_path() +
+  geom_point(data=df, aes(lrScale, conlibScale)) +
+  geom_text(data=df, aes(lrScale, conlibScale, label=party), hjust=-.3, vjust=.3, show.legend = FALSE) +
+  coord_cartesian(xlim=c(-10,10), ylim=c(-10, 10)) +
+  scale_color_manual(values = c("brown", "steelblue3", "darkgreen", "green3", "green3", "orange3", "orange", "orange", "orange", "orange", "orange", "red", "darkgrey"),
+                     name = "",
+                     breaks = c("kesk sde irl ekre 63",
+                                "ref irl ekre 51",
+                                "ref sde vaba 53",
+                                "ref kesk sde vaba 80",
+                                "kesk sde vaba ekre 57",
+                                "ref irl vaba 52",
+                                "ref kesk sde vaba ekre 87")) +
+  xlab("left-right") + ylab("conservative-liberal") +
+  theme_minimal() +
+  guides(colour = guide_legend(override.aes = list(linetype = 0, size = 1.5))) +
+  theme(aspect.ratio = 1,
+        legend.position = "right",
+        plot.background = NULL)
+```
+
+The results indicate that our new government has the largest overlap between areas of indifference. Overlapping area is situated at the middle of our landscape, which is an expected result, given that Keskerakond and SDE are liberal-leftist parties and IRL is conservative-right-wing party. We can also note that no overlap exists between Reformierakond, SDE and IRL which may explain the long negotiation talks in spring 2015.
